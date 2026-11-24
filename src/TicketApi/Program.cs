@@ -1,11 +1,22 @@
+
 using Booking.Contracts;
+using TicketApi.Hubs;
+using Microsoft.AspNetCore.SignalR;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Đăng ký SignalR
+builder.Services.AddSignalR();
+
 var app = builder.Build();
+
+// Cấu hình phục vụ giao diện Web
 app.UseDefaultFiles();
 app.UseStaticFiles();
-var bookings = new Dictionary<Guid, BookingInfo>();
+
+// Đăng ký SignalR Hub
+app.MapHub<BookingHub>("/hubs/bookings");
+
 // Dữ liệu sự kiện giả lập
 var events = new List<TicketEvent>
 {
@@ -18,7 +29,6 @@ var events = new List<TicketEvent>
         Price = 1200000m,
         AvailableTickets = 2000
     },
-
     new TicketEvent
     {
         Id = Guid.NewGuid(),
@@ -27,17 +37,23 @@ var events = new List<TicketEvent>
         EventDate = new DateTime(2027, 1, 15, 9, 0, 0),
         Price = 200000m,
         AvailableTickets = 300
-    },
+    }
 };
+
+// Lưu đơn đặt vé trong bộ nhớ
+var bookings = new Dictionary<Guid, BookingInfo>();
+
 // API lấy danh sách sự kiện
 app.MapGet("/api/events", () =>
 {
     return Results.Ok(events);
 });
-// API lấy thông tin chi tiết của một sự kiện theo ID
+
+// API lấy chi tiết một sự kiện
 app.MapGet("/api/events/{id:guid}", (Guid id) =>
 {
     var ticketEvent = events.FirstOrDefault(e => e.Id == id);
+
     if (ticketEvent == null)
     {
         return Results.NotFound(new
@@ -45,17 +61,21 @@ app.MapGet("/api/events/{id:guid}", (Guid id) =>
             message = $"Event with ID {id} not found."
         });
     }
+
     return Results.Ok(ticketEvent);
 });
-// API đặt vé cho một sự kiện
-app.MapPost("/api/bookings", (BookingRequest bookingRequest) =>
+
+// API tạo đơn đặt vé
+app.MapPost("/api/bookings", async (
+    BookingRequest bookingRequest,
+    IHubContext<BookingHub> hubContext) =>
 {
     // Kiểm tra UserId
     if (string.IsNullOrWhiteSpace(bookingRequest.UserId))
     {
         return Results.BadRequest(new
         {
-            message = "UserId must not be empty."
+            message = "UserId is required."
         });
     }
 
@@ -64,32 +84,33 @@ app.MapPost("/api/bookings", (BookingRequest bookingRequest) =>
     {
         return Results.BadRequest(new
         {
-            message = "Quantity must be greater than zero."
+            message = "Quantity must be greater than 0."
         });
     }
 
-    // Kiểm tra sự kiện có tồn tại
+    // Kiểm tra sự kiện
     var ticketEvent = events.FirstOrDefault(
-        e => e.Id == bookingRequest.EventId);
+        e => e.Id == bookingRequest.EventId
+    );
 
     if (ticketEvent == null)
     {
         return Results.NotFound(new
         {
-            message = $"Event with ID {bookingRequest.EventId} not found."
+            message = "Event not found."
         });
     }
 
-    // Kiểm tra sơ bộ số vé còn lại
-    if (bookingRequest.Quantity > ticketEvent.AvailableTickets)
+    // Kiểm tra số lượng vé còn lại
+    if (ticketEvent.AvailableTickets < bookingRequest.Quantity)
     {
         return Results.BadRequest(new
         {
-            message = $"Not enough tickets available. Only {ticketEvent.AvailableTickets} tickets left."
+            message = "Not enough tickets available."
         });
     }
 
-    // Tạo booking
+    // Tạo đơn đặt vé
     var bookingInfo = new BookingInfo
     {
         BookingId = Guid.NewGuid(),
@@ -99,16 +120,37 @@ app.MapPost("/api/bookings", (BookingRequest bookingRequest) =>
         Status = "Pending"
     };
 
-    // Lưu booking
+    // Lưu đơn đặt vé
     bookings[bookingInfo.BookingId] = bookingInfo;
 
-    // Trả HTTP 201 Created
+    // Giả lập xử lý đơn đặt vé trong nền
+    _ = Task.Run(async () =>
+    {
+        await Task.Delay(3000);
+
+        bookingInfo.Status = "Confirmed";
+
+        var message = new
+        {
+            BookingId = bookingInfo.BookingId,
+            Status = bookingInfo.Status,
+            UpdatedAt = DateTime.UtcNow
+        };
+
+        // Gửi thông báo qua SignalR
+        await hubContext.Clients
+            .Group($"booking:{bookingInfo.BookingId}")
+            .SendAsync("BookingStatusChanged", message);
+    });
+
+    // Trả về kết quả tạo đơn
     return Results.Created(
         $"/api/bookings/{bookingInfo.BookingId}",
         bookingInfo
     );
 });
-// API tra cứu booking theo ID
+
+// API lấy thông tin đơn đặt vé
 app.MapGet("/api/bookings/{id:guid}", (Guid id) =>
 {
     if (!bookings.TryGetValue(id, out var bookingInfo))
@@ -121,7 +163,8 @@ app.MapGet("/api/bookings/{id:guid}", (Guid id) =>
 
     return Results.Ok(bookingInfo);
 });
-// API lấy danh sách booking theo UserId
+
+// API lấy danh sách đơn đặt vé của người dùng
 app.MapGet("/api/users/{userId}/bookings", (string userId) =>
 {
     var userBookings = bookings.Values
