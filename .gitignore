@@ -1,0 +1,16 @@
+# Visual Studio
+.vs/
+bin/
+obj/
+
+# User settings
+*.user
+*.suo
+
+# Environment secrets
+.env
+.env.*
+
+# Logs
+logs/
+*.log

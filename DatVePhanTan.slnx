@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Booking.Contracts/Booking.Contracts.csproj" />
+    <Project Path="src/BookingWorker/BookingWorker.csproj" />
+    <Project Path="src/TicketApi/TicketApi.csproj" />
+  </Folder>
+</Solution>
